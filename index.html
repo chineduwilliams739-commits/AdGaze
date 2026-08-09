@@ -1,0 +1,480 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { 
+  Home, ListTodo, Users, User, Settings as SettingsIcon, CheckCircle, 
+  XCircle, Clock, Wallet, ChevronRight, Copy, Award,
+  Play, Plus, Activity, LogOut, Check, Megaphone, 
+  TrendingUp, Shield, Search, Calendar, History, MessageCircle, BarChart2, PieChart, Zap, ExternalLink
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { 
+  getFirestore, doc, setDoc, getDoc, collection, 
+  onSnapshot, addDoc, updateDoc, deleteDoc
+} from 'firebase/firestore';
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'adgaze-default';
+
+const AD_REWARD = 0.001;
+const DAILY_AD_LIMIT = 20;
+const REFERRAL_BONUS = 0.05; 
+const REFERRAL_AD_REQUIREMENT = 5; 
+const CHECK_IN_BONUS = 0.005; 
+const MIN_WITHDRAWAL = 3;
+const TASK_UPLOAD_FEE = 5;
+const ADMIN_WALLET = "TRX_GINIKAUH_WALLET_ADDRESS_123456";
+const MASTER_ADMIN_USERNAME = "ginikauh";
+const MONETAG_ZONE_ID = "11533609"; 
+const MONETAG_DIRECT_LINK = "https://example.com/your-monetag-direct-link";
+const AD_COOLDOWN_SECONDS = 30;
+const DIRECT_LINK_REWARD = 0.0005;
+const DAILY_POPUP_LIMIT = 10;
+
+const GlassCard = ({ children, className = "", onClick }) => (
+  <div 
+    onClick={onClick}
+    className={`bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 shadow-xl ${onClick ? 'cursor-pointer active:scale-95 transition-transform' : ''} ${className}`}
+  >
+    {children}
+  </div>
+);
+
+const Button = ({ children, onClick, variant = 'primary', className = "", disabled = false, loading = false }) => {
+  const baseStyle = "w-full py-3 px-4 rounded-xl font-bold flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95";
+  const variants = {
+    primary: "bg-gradient-to-r from-[#6C63FF] to-[#8b5cf6] text-white shadow-[0_0_15px_rgba(108,99,255,0.4)]",
+    secondary: "bg-white/10 text-white hover:bg-white/20",
+    success: "bg-gradient-to-r from-green-500 to-emerald-600 text-white",
+    danger: "bg-red-500/20 text-red-400 border border-red-500/50 hover:bg-red-500/30",
+    gold: "bg-gradient-to-r from-[#FFD700] to-[#FDB931] text-black shadow-[0_0_15px_rgba(255,215,0,0.3)]"
+  };
+
+  return (
+    <button 
+      onClick={onClick} 
+      className={`${baseStyle} ${variants[variant]} ${className}`}
+      disabled={disabled || loading}
+    >
+      {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : children}
+    </button>
+  );
+};
+
+const Badge = ({ status, text }) => {
+  const styles = {
+    pending: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
+    approved: "bg-green-500/20 text-green-400 border-green-500/50",
+    completed: "bg-green-500/20 text-green-400 border-green-500/50",
+    rejected: "bg-red-500/20 text-red-400 border-red-500/50",
+    failed: "bg-red-500/20 text-red-400 border-red-500/50",
+    active: "bg-blue-500/20 text-blue-400 border-blue-500/50",
+    processed: "bg-green-500/20 text-green-400 border-green-500/50",
+  };
+  const defaultStyle = "bg-gray-500/20 text-gray-400 border-gray-500/50";
+  
+  return (
+    <span className={`text-xs px-2 py-1 rounded-md border ${styles[status?.toLowerCase()] || defaultStyle}`}>
+      {text || status?.toUpperCase()}
+    </span>
+  );
+};
+
+const generateFakeWithdrawals = () => {
+  const names = ['crypto_king', 'sarah99', 'trx_whale', 'mike_b', 'investor_x', 'anna_k', 'tony_stark', 'web3_dev'];
+  return Array.from({ length: 15 }).map((_, i) => ({
+    id: i,
+    user: `@${names[Math.floor(Math.random() * names.length)]}${Math.floor(Math.random() * 100)}`,
+    amount: (Math.random() * (45 - 3) + 3).toFixed(2),
+    time: `${Math.floor(Math.random() * 59) + 1}m ago`
+  }));
+};
+
+const FAKE_WITHDRAWALS = generateFakeWithdrawals();
+const tg = window.Telegram?.WebApp || null;
+
+const hapticFeedback = (type = 'impact', style = 'light') => {
+  if (tg && tg.HapticFeedback) {
+    if (type === 'impact') tg.HapticFeedback.impactOccurred(style);
+    if (type === 'notification') tg.HapticFeedback.notificationOccurred(style);
+    if (type === 'selection') tg.HapticFeedback.selectionChanged();
+  }
+};
+
+const getTodayDateString = () => new Date().toISOString().split('T')[0];
+
+export default function AdGazeApp() {
+  const [user, setUser] = useState(null);
+  const [dbUser, setDbUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('home');
+  const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [versionTapCount, setVersionTapCount] = useState(0);
+  const [loadingInitial, setLoadingInitial] = useState(true);
+  const [monetagLoaded, setMonetagLoaded] = useState(false);
+  const [adPlaying, setAdPlaying] = useState(false);
+
+  const [tasks, setTasks] = useState([]);
+  const [taskSubmissions, setTaskSubmissions] = useState([]);
+  const [withdrawals, setWithdrawals] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [globalSettings, setGlobalSettings] = useState({ supportHandle: '@ginikauh' });
+
+  const isAdmin = useMemo(() => {
+    return dbUser?.role === 'admin' || dbUser?.username?.toLowerCase() === MASTER_ADMIN_USERNAME.toLowerCase();
+  }, [dbUser]);
+
+  const showToast = (message, type = 'info') => {
+    setToast({ show: true, message, type });
+    hapticFeedback('notification', type === 'error' ? 'error' : 'success');
+    setTimeout(() => setToast({ show: false, message: '', type: 'info' }), 3000);
+  };
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth Error:", error);
+        showToast("Authentication failed", "error");
+        setLoadingInitial(false);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      if (firebaseUser) {
+        // Ensure user document exists in Firestore
+        try {
+          const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', firebaseUser.uid);
+          const userSnap = await getDoc(userDocRef);
+          
+          if (!userSnap.exists()) {
+            const tgUser = tg?.initDataUnsafe?.user;
+            const newUserData = {
+              uid: firebaseUser.uid,
+              firstName: tgUser?.first_name || 'Crypto User',
+              username: tgUser?.username || `user_${firebaseUser.uid.slice(0, 6)}`,
+              balance: 0,
+              totalEarned: 0,
+              dailyAdCount: 0,
+              dailyPopupsWatched: 0,
+              totalAdsWatched: 0,
+              referralCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
+              referredBy: '',
+              role: MASTER_ADMIN_USERNAME.toLowerCase() === (tgUser?.username || '').toLowerCase() ? 'admin' : 'user',
+              createdAt: new Date().toISOString(),
+              lastActive: new Date().toISOString()
+            };
+            await setDoc(userDocRef, newUserData);
+          }
+
+          // Realtime listener for user profile
+          const unsubUser = onSnapshot(userDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+              setDbUser(docSnap.data());
+            }
+            setLoadingInitial(false);
+          });
+          return () => unsubUser();
+        } catch (e) {
+          console.error("Error setting up user profile:", e);
+          setLoadingInitial(false);
+        }
+      } else {
+        setDbUser(null);
+        setLoadingInitial(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!document.querySelector(`script[data-sdk="show_${MONETAG_ZONE_ID}"]`)) {
+      const script = document.createElement('script');
+      script.src = 'https://libtl.com/sdk.js';
+      script.setAttribute('data-zone', MONETAG_ZONE_ID);
+      script.setAttribute('data-sdk', `show_${MONETAG_ZONE_ID}`);
+      script.async = true;
+      script.onload = () => {
+        setMonetagLoaded(true);
+      };
+      script.onerror = () => {
+        window[`show_${MONETAG_ZONE_ID}`] = () => {
+          return new Promise((resolve) => {
+            setTimeout(resolve, 2000);
+          });
+        };
+        setMonetagLoaded(true);
+      };
+      document.head.appendChild(script);
+    } else {
+      setMonetagLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || !dbUser) return;
+
+    const publicRef = (col) => collection(db, 'artifacts', appId, 'public', 'data', col);
+
+    const unsubTasks = onSnapshot(publicRef('tasks'), (snap) => setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubSubmissions = onSnapshot(publicRef('taskSubmissions'), (snap) => setTaskSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubWithdrawals = onSnapshot(publicRef('withdrawals'), (snap) => setWithdrawals(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubUsers = onSnapshot(publicRef('users'), (snap) => setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubTransactions = onSnapshot(publicRef('transactions'), (snap) => setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    
+    const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings'), (docSnap) => {
+      if (docSnap.exists()) {
+        setGlobalSettings(docSnap.data());
+      } else {
+        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings'), { supportHandle: '@ginikauh' });
+      }
+    });
+
+    return () => {
+      unsubTasks(); unsubSubmissions(); unsubWithdrawals(); unsubUsers(); unsubTransactions(); unsubSettings();
+    };
+  }, [user, dbUser]);
+
+  const handleRewardUser = async () => {
+    try {
+      const nowTimestamp = Date.now();
+      const newTotalAds = (dbUser.totalAdsWatched || 0) + 1;
+      const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
+      
+      let updates = {
+        balance: dbUser.balance + AD_REWARD,
+        totalEarned: dbUser.totalEarned + AD_REWARD,
+        dailyAdCount: dbUser.dailyAdCount + 1,
+        totalAdsWatched: newTotalAds,
+        lastAdTimestamp: nowTimestamp,
+        lastActive: new Date().toISOString()
+      };
+
+      if (newTotalAds === REFERRAL_AD_REQUIREMENT && dbUser.referredBy) {
+        const referrer = allUsers.find(u => u.referralCode === dbUser.referredBy);
+        if (referrer) {
+          const refRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', referrer.uid);
+          await updateDoc(refRef, {
+             balance: referrer.balance + REFERRAL_BONUS,
+             totalEarned: referrer.totalEarned + REFERRAL_BONUS
+          });
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), {
+             userId: referrer.uid,
+             type: 'referral_bonus',
+             amount: REFERRAL_BONUS,
+             title: `Referral Bonus (@${dbUser.username || dbUser.firstName})`,
+             date: new Date().toISOString()
+          });
+        }
+      }
+
+      await updateDoc(userRef, updates);
+      
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), {
+        userId: user.uid,
+        type: 'ad_reward',
+        amount: AD_REWARD,
+        title: 'Monetag Ad View Reward',
+        date: new Date().toISOString()
+      });
+
+      showToast(`Ad completed! Earned +${AD_REWARD} USDT`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to process reward.", "error");
+    }
+  };
+
+  const handlePopupReward = async () => {
+    try {
+      const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
+      
+      let updates = {
+        balance: dbUser.balance + DIRECT_LINK_REWARD,
+        totalEarned: dbUser.totalEarned + DIRECT_LINK_REWARD,
+        dailyPopupsWatched: (dbUser.dailyPopupsWatched || 0) + 1,
+        lastActive: new Date().toISOString()
+      };
+
+      await updateDoc(userRef, updates);
+      
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), {
+        userId: user.uid,
+        type: 'popup_reward',
+        amount: DIRECT_LINK_REWARD,
+        title: 'Pop-up Link Reward',
+        date: new Date().toISOString()
+      });
+
+      showToast(`Pop-up verified! Earned +${DIRECT_LINK_REWARD} USDT`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to process pop-up reward.", "error");
+    }
+  };
+
+  const HomeTab = () => {
+    const [cooldownTimeLeft, setCooldownTimeLeft] = useState(0);
+    const [checkingIn, setCheckingIn] = useState(false);
+    const [tickerIndex, setTickerIndex] = useState(0);
+    const [popupLoading, setPopupLoading] = useState(false);
+    const canCheckIn = dbUser?.lastCheckInDate !== getTodayDateString();
+
+    useEffect(() => {
+      const interval = setInterval(() => setTickerIndex((prev) => (prev + 1) % FAKE_WITHDRAWALS.length), 3000);
+      return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+      if (!dbUser?.lastAdTimestamp) return;
+      const interval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - dbUser.lastAdTimestamp) / 1000);
+        const remaining = AD_COOLDOWN_SECONDS - elapsed;
+        if (remaining > 0) {
+          setCooldownTimeLeft(remaining);
+        } else {
+          setCooldownTimeLeft(0);
+        }
+      }, 1000);
+      return () => clearInterval(interval);
+    }, [dbUser?.lastAdTimestamp]);
+
+    const handleCheckIn = async () => {
+      if (!canCheckIn) return;
+      setCheckingIn(true);
+      hapticFeedback('impact', 'medium');
+      
+      try {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), {
+          balance: dbUser.balance + CHECK_IN_BONUS,
+          totalEarned: dbUser.totalEarned + CHECK_IN_BONUS,
+          lastCheckInDate: getTodayDateString(),
+          lastActive: new Date().toISOString()
+        });
+        
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), {
+          userId: user.uid,
+          type: 'check_in',
+          amount: CHECK_IN_BONUS,
+          title: 'Daily Check-in Bonus',
+          date: new Date().toISOString()
+        });
+        
+        showToast(`Checked in! Earned ${CHECK_IN_BONUS} USDT`, 'success');
+      } catch (e) {
+        showToast("Check-in failed", "error");
+      } finally {
+        setCheckingIn(false);
+      }
+    };
+
+    const handleStartInAppAd = () => {
+      if (dbUser.dailyAdCount >= DAILY_AD_LIMIT) {
+        return showToast("Daily limit reached! Come back tomorrow.", "error");
+      }
+      if (cooldownTimeLeft > 0) {
+        return showToast(`Please wait for cooldown timer (${cooldownTimeLeft}s) before starting next ad!`, "error");
+      }
+      
+      if (!monetagLoaded || typeof window[`show_${MONETAG_ZONE_ID}`] !== 'function') {
+        return showToast("Ad system is still loading or blocked by browser. Please wait.", "error");
+      }
+
+      hapticFeedback('impact', 'medium');
+      setAdPlaying(true);
+
+      window[`show_${MONETAG_ZONE_ID}`]().then(() => {
+          handleRewardUser();
+          setAdPlaying(false);
+          hapticFeedback('notification', 'success');
+      }).catch(e => {
+         console.error("Ad playback failed or cancelled", e);
+         showToast("Ad view cancelled or failed.", "error");
+         setAdPlaying(false);
+      });
+    };
+
+    const handleStartPopupAd = () => {
+      if ((dbUser?.dailyPopupsWatched || 0) >= DAILY_POPUP_LIMIT) {
+        return showToast("Daily pop-up limit reached! Come back tomorrow.", "error");
+      }
+      
+      if (!monetagLoaded || typeof window[`show_${MONETAG_ZONE_ID}`] !== 'function') {
+        return showToast("Ad system is still loading or blocked by browser. Please wait.", "error");
+      }
+      
+      hapticFeedback('impact', 'medium');
+      setPopupLoading(true);
+      
+      window[`show_${MONETAG_ZONE_ID}`]('pop').then(() => {
+        handlePopupReward();
+        setPopupLoading(false);
+        hapticFeedback('notification', 'success');
+      }).catch(e => {
+        console.error("Popup ad failed or cancelled", e);
+        showToast("Pop-up ad cancelled or failed.", "error");
+        setPopupLoading(false);
+      });
+    };
+
+    const myTransactions = transactions.filter(t => t.userId === user.uid);
+    const adEarnings = myTransactions.filter(t => t.type === 'ad_reward').reduce((acc, curr) => acc + curr.amount, 0);
+    const popupEarnings = myTransactions.filter(t => t.type === 'popup_reward').reduce((acc, curr) => acc + curr.amount, 0);
+    const checkinEarnings = myTransactions.filter(t => t.type === 'check_in').reduce((acc, curr) => acc + curr.amount, 0);
+    const taskEarnings = myTransactions.filter(t => t.type === 'task_reward').reduce((acc, curr) => acc + curr.amount, 0);
+    const referralEarningsFromHistory = myTransactions.filter(t => t.type === 'referral_bonus').reduce((acc, curr) => acc + curr.amount, 0);
+
+    const totalAdEarnings = adEarnings + popupEarnings;
+
+    return (
+      <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <header className="flex justify-between items-center bg-gradient-to-r from-white/5 to-transparent p-4 rounded-2xl border border-white/5">
+          <div>
+            <h1 className="text-2xl font-bold text-white">Welcome back, {dbUser?.firstName}! 👋</h1>
+            <p className="text-gray-400 text-sm">Monetag In-App Ad Viewer & Rewards</p>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#6C63FF] to-[#FFD700] p-[2px] shadow-lg">
+            <div className="w-full h-full bg-[#1a1a2e] rounded-2xl flex items-center justify-center font-bold text-white text-lg">
+              {dbUser?.firstName?.charAt(0)}
+            </div>
+          </div>
+        </header>
+
+        {globalSettings.announcement && (
+          <GlassCard className="border-blue-500/50 bg-gradient-to-r from-blue-500/20 to-transparent flex items-start gap-3 p-4">
+             <Megaphone size={20} className="text-blue-400 flex-shrink-0 mt-0.5" />
+             <div>
+               <h3 className="font-bold text-blue-400 text-sm mb-0.5">System Announcement</h3>
+               <p className="text-sm text-blue-100 leading-relaxed">{globalSettings.announcement}</p>
+             </div>
+          </GlassCard>
+        )}
+
+        {canCheckIn ? (
+          <GlassCard className="flex justify-between items-center border-[#FFD700]/50 bg-gradient-to-r from-[#FFD700]/20 to-transparent animate-pulse">
+             <div>
+               <h3 className="font-bold text-[#FFD700] flex items-center gap-2"><Calendar size={18}/> Daily Streak Check-in</h3>
+               <p className="text-sm text-gray-300 mt-1">Claim your daily complimentary {CHECK_IN_BONUS} USDT bonus!</p>
+             </div>
+             <Button onClick={handleCheckIn} loading={checkingIn} variant="gold" className="w-auto px-5 py-2.5 text-sm font-black shadow-lg">
+               Claim
+             </Button>
+          </GlassCard>
+        ) : (
+          <div className="flex items-center justify-between bg-green-500/10 p-4 rounded-2xl border border-green-500/20">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-400">
+                <CheckCircle size={18} />
+              </div>
+              <div>
+                <p class
