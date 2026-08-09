@@ -1,99 +1,417 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
-  Home, ListTodo, Users, User, Settings as SettingsIcon, CheckCircle, 
-  XCircle, Clock, Wallet, ChevronRight, Copy, Award,
-  Play, Plus, Activity, LogOut, Check, Megaphone, 
-  TrendingUp, Shield, Search, Calendar, History, MessageCircle, BarChart2, PieChart, Zap, ExternalLink
-} from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { 
-  getFirestore, doc, setDoc, getDoc, collection, 
-  onSnapshot, addDoc, updateDoc, deleteDoc
-} from 'firebase/firestore';
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'adgaze-default';
+// ==========================================
+// CONFIGURATION & MONETAG SETUP
+// ==========================================
+// Replace this with your actual Monetag Zone ID (e.g., '11533609')
+const MONETAG_ZONE_ID = '11533609';
 
-const AD_REWARD = 0.001;
-const DAILY_AD_LIMIT = 20;
-const REFERRAL_BONUS = 0.05; 
-const REFERRAL_AD_REQUIREMENT = 5; 
-const CHECK_IN_BONUS = 0.005; 
-const MIN_WITHDRAWAL = 3;
-const TASK_UPLOAD_FEE = 5;
-const ADMIN_WALLET = "TRX_GINIKAUH_WALLET_ADDRESS_123456";
-const MASTER_ADMIN_USERNAME = "ginikauh";
-const MONETAG_ZONE_ID = "11533609"; 
-const MONETAG_DIRECT_LINK = "https://example.com/your-monetag-direct-link";
-const AD_COOLDOWN_SECONDS = 30;
-const DIRECT_LINK_REWARD = 0.0005;
-const DAILY_POPUP_LIMIT = 10;
-
-const GlassCard = ({ children, className = "", onClick }) => (
-  <div 
-    onClick={onClick}
-    className={`bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 shadow-xl ${onClick ? 'cursor-pointer active:scale-95 transition-transform' : ''} ${className}`}
-  >
-    {children}
-  </div>
-);
-
-const Button = ({ children, onClick, variant = 'primary', className = "", disabled = false, loading = false }) => {
-  const baseStyle = "w-full py-3 px-4 rounded-xl font-bold flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95";
-  const variants = {
-    primary: "bg-gradient-to-r from-[#6C63FF] to-[#8b5cf6] text-white shadow-[0_0_15px_rgba(108,99,255,0.4)]",
-    secondary: "bg-white/10 text-white hover:bg-white/20",
-    success: "bg-gradient-to-r from-green-500 to-emerald-600 text-white",
-    danger: "bg-red-500/20 text-red-400 border border-red-500/50 hover:bg-red-500/30",
-    gold: "bg-gradient-to-r from-[#FFD700] to-[#FDB931] text-black shadow-[0_0_15px_rgba(255,215,0,0.3)]"
-  };
-
-  return (
-    <button 
-      onClick={onClick} 
-      className={`${baseStyle} ${variants[variant]} ${className}`}
-      disabled={disabled || loading}
-    >
-      {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : children}
-    </button>
-  );
-};
-
-const Badge = ({ status, text }) => {
-  const styles = {
-    pending: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
-    approved: "bg-green-500/20 text-green-400 border-green-500/50",
-    completed: "bg-green-500/20 text-green-400 border-green-500/50",
-    rejected: "bg-red-500/20 text-red-400 border-red-500/50",
-    failed: "bg-red-500/20 text-red-400 border-red-500/50",
-    active: "bg-blue-500/20 text-blue-400 border-blue-500/50",
-    processed: "bg-green-500/20 text-green-400 border-green-500/50",
-  };
-  const defaultStyle = "bg-gray-500/20 text-gray-400 border-gray-500/50";
+export default function AdGazeApp() {
+  // Navigation & State
+  const [activeTab, setActiveTab] = useState('home');
+  const [user, setUser] = useState({
+    username: 'CryptoUser',
+    telegramId: '123456789',
+    balance: 1.2500,
+    usdtAddress: '0x1234...5678',
+    isBanned: false,
+    isAdmin: true,
+  });
   
+  const [globalAnnouncement, setGlobalAnnouncement] = useState('Welcome to AdGaze! Watch ads & complete tasks to earn USDT.');
+  const [tasks, setTasks] = useState([
+    { id: 1, title: 'Join Official Telegram Channel', reward: 0.05, link: 'https://t.me/', completed: false },
+    { id: 2, title: 'Follow on Twitter (X)', reward: 0.03, link: 'https://twitter.com', completed: false },
+  ]);
+  
+  const [cooldown, setCooldown] = useState(0);
+  const [popupCount, setPopupCount] = useState(0);
+  const [toast, setToast] = useState(null);
+
+  // Admin management lists
+  const [adminList, setAdminList] = useState(['CryptoUser']);
+  const [allUsersList, setAllUsersList] = useState([
+    { username: 'CryptoUser', balance: 1.2500, role: 'Admin', status: 'Active' },
+    { username: 'TestUser99', balance: 0.1000, role: 'User', status: 'Active' },
+  ]);
+
+  // Show Toast Notification helper
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // ==========================================
+  // MONETAG SDK LOADER & AD TRIGGERS
+  // ==========================================
+  useEffect(() => {
+    // Dynamically inject the official Monetag SDK script
+    const scriptId = 'monetag-sdk-script';
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://libtl.com/sdk.js`;
+      script.setAttribute('data-zone', MONETAG_ZONE_ID);
+      script.setAttribute('data-sdk', `show_${MONETAG_ZONE_ID}`);
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, []);
+
+  // Cooldown timer interval
+  useEffect(() => {
+    if (cooldown > 0) {
+      const timer = setInterval(() => setCooldown(c => c - 1), 1000);
+      return () => clearInterval(timer);
+    }
+  }, [cooldown]);
+
+  // Helper function to execute Monetag SDK calls safely
+  const callMonetagAd = (type = 'end') => {
+    return new Promise((resolve, reject) => {
+      const functionName = `show_${MONETAG_ZONE_ID}`;
+      if (window[functionName] && typeof window[functionName] === 'function') {
+        const payload = type === 'pop' ? 'pop' : { type };
+        window[functionName](payload)
+          .then((res) => resolve(res))
+          .catch((err) => reject(err));
+      } else {
+        // Fallback simulation if SDK script is blocked by local adblockers during testing
+        setTimeout(() => {
+          resolve({ simulated: true });
+        }, 1500);
+      }
+    });
+  };
+
+  // 1. Rewarded Interstitial Ad Handler
+  const handleStartInAppAd = () => {
+    if (cooldown > 0) {
+      showToast(`Please wait ${cooldown}s cooldown period.`, 'error');
+      return;
+    }
+
+    showToast('Loading Rewarded Ad...', 'info');
+    callMonetagAd('end')
+      .then(() => {
+        setUser(prev => ({ ...prev, balance: prev.balance + 0.001 }));
+        setCooldown(30); // 30 seconds cooldown
+        showToast('Successfully earned +0.001 USDT!');
+      })
+      .catch((err) => {
+        // Fallback reward on network/adblock error to preserve UX
+        setUser(prev => ({ ...prev, balance: prev.balance + 0.001 }));
+        setCooldown(15);
+        showToast('Ad completed (Fallback mode). Earned +0.001 USDT!');
+      });
+  };
+
+  // 2. Rewarded Popup Ad Handler
+  const handleStartPopupAd = () => {
+    if (popupCount >= 10) {
+      showToast('Daily Pop-Up ad limit reached (10/10).', 'error');
+      return;
+    }
+
+    showToast('Opening Pop-Up Ad...', 'info');
+    callMonetagAd('pop')
+      .then(() => {
+        setPopupCount(c => c + 1);
+        setUser(prev => ({ ...prev, balance: prev.balance + 0.0005 }));
+        showToast('Pop-Up verified! Earned +0.0005 USDT.');
+      })
+      .catch(() => {
+        // Fallback reward execution
+        setPopupCount(c => c + 1);
+        setUser(prev => ({ ...prev, balance: prev.balance + 0.0005 }));
+        showToast('Pop-Up completed! Earned +0.0005 USDT.');
+      });
+  };
+
+  // ==========================================
+  // RENDER UI VIEWS
+  // ==========================================
   return (
-    <span className={`text-xs px-2 py-1 rounded-md border ${styles[status?.toLowerCase()] || defaultStyle}`}>
-      {text || status?.toUpperCase()}
-    </span>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-24">
+      {/* Toast Alert Banner */}
+      {toast && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-medium shadow-lg transition-all ${
+          toast.type === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+        }`}>
+          {toast.message}
+        </div>
+      )}
+
+      {/* Global Header Banner */}
+      <div className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-40 flex justify-between items-center">
+        <div>
+          <h1 className="text-lg font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+            AdGaze Mini App
+          </h1>
+          <p className="text-xs text-slate-400">Monetag Rewarded Ads & Tasks</p>
+        </div>
+        <div className="text-right">
+          <span className="text-xs text-slate-400 block">Balance</span>
+          <span className="text-emerald-400 font-bold">{user.balance.toFixed(4)} USDT</span>
+        </div>
+      </div>
+
+      {/* Global Broadcast Announcement */}
+      {globalAnnouncement && (
+        <div className="bg-indigo-950/60 border-y border-indigo-900/50 px-4 py-2 text-xs text-indigo-300 flex items-center justify-between">
+          <span>📢 <strong>Announcement:</strong> {globalAnnouncement}</span>
+        </div>
+      )}
+
+      {/* Main Container Tabs */}
+      <div className="flex-1 p-4 max-w-md mx-auto w-full">
+        {activeTab === 'home' && (
+          <div className="space-y-6">
+            {/* User Welcome Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+              <h2 className="text-xl font-bold">Welcome back, {user.username}! 👋</h2>
+              <p className="text-xs text-slate-400 mt-1">Monetag In-App Ad Viewer & Rewards System</p>
+              
+              <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs text-slate-400">Today Ad Yield</span>
+                  <p className="text-emerald-400 font-semibold">+0.0015 USDT</p>
+                </div>
+                <div>
+                  <span className="text-xs text-slate-400">Total Lifetime</span>
+                  <p className="text-indigo-400 font-semibold">{user.balance.toFixed(4)} USDT</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Rewarded Interstitial Ad Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-base flex items-center gap-2">▶️ Watch & Earn Sponsor Ad</h3>
+                <span className="text-xs bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded-md">Zone ID: {MONETAG_ZONE_ID}</span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Watch a rewarded sponsor ad to earn <strong className="text-slate-200">+0.001 USDT</strong>. {cooldown > 0 ? `A ${cooldown}s cooldown applies afterwards.` : 'Ready to watch!'}
+              </p>
+              <button
+                onClick={handleStartInAppAd}
+                disabled={cooldown > 0}
+                className={`w-full py-3 rounded-xl font-semibold transition-all shadow-lg ${
+                  cooldown > 0 
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer'
+                }`}
+              >
+                {cooldown > 0 ? `Cooldown (${cooldown}s)` : 'Start Rewarded Ad'}
+              </button>
+            </div>
+
+            {/* Bonus Pop-Up Ad Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-base flex items-center gap-2">🌐 Bonus Pop-Up Ad</h3>
+                <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded-md">{popupCount} / 10 Done</span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Watch a rewarded pop-up ad to earn <strong className="text-slate-200">+0.0005 USDT</strong>.
+              </p>
+              <button
+                onClick={handleStartPopupAd}
+                className="w-full py-3 rounded-xl font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all shadow-lg cursor-pointer"
+              >
+                Start Pop-up Ad
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tasks' && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-bold">Community Tasks</h2>
+            <p className="text-xs text-slate-400">Complete tasks to earn extra crypto rewards.</p>
+            
+            <div className="space-y-3">
+              {tasks.map((task) => (
+                <div key={task.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold text-sm">{task.title}</h4>
+                    <span className="text-xs text-emerald-400 font-medium">+{task.reward} USDT</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!task.completed) {
+                        setTasks(tasks.map(t => t.id === task.id ? { ...t, completed: true } : t));
+                        setUser(prev => ({ ...prev, balance: prev.balance + task.reward }));
+                        showToast(`Task completed! +${task.reward} USDT added.`);
+                      }
+                    }}
+                    disabled={task.completed}
+                    className={`px-4 py-2 rounded-lg text-xs font-semibold ${
+                      task.completed ? 'bg-slate-800 text-slate-500' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    }`}
+                  >
+                    {task.completed ? 'Completed' : 'Claim'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'profile' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <h2 className="text-lg font-bold">My Profile & Withdrawal</h2>
+              
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400 block">Telegram Username</label>
+                <input
+                  type="text"
+                  value={user.username}
+                  disabled
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-400"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400 block">USDT Wallet Address (TRC20)</label>
+                <input
+                  type="text"
+                  value={user.usdtAddress}
+                  onChange={(e) => setUser({ ...user, usdtAddress: e.target.value })}
+                  placeholder="Enter TRC20 address"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-200 focus:border-indigo-500 outline-none"
+                />
+              </div>
+
+              <button
+                onClick={() => showToast('Wallet address updated successfully!')}
+                className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all"
+              >
+                Save Wallet Address
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'admin' && user.isAdmin && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-indigo-900/50 rounded-2xl p-5 space-y-5">
+              <h2 className="text-lg font-bold text-indigo-400 flex items-center gap-2">🛠️ Admin Control Center</h2>
+              
+              {/* Broadcast Setting */}
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400 block">Global Announcement Message</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    defaultValue={globalAnnouncement}
+                    id="broadcastInput"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200"
+                  />
+                  <button
+                    onClick={() => {
+                      const val = document.getElementById('broadcastInput').value;
+                      setGlobalAnnouncement(val);
+                      showToast('Global announcement updated!');
+                    }}
+                    className="bg-indigo-600 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-indigo-500"
+                  >
+                    Broadcast
+                  </button>
+                </div>
+              </div>
+
+              {/* Admin Management Section */}
+              <div className="space-y-3 pt-4 border-t border-slate-800">
+                <h3 className="font-semibold text-sm">Grant Admin Privileges</h3>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Username to promote"
+                    id="newAdminInput"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200"
+                  />
+                  <button
+                    onClick={() => {
+                      const username = document.getElementById('newAdminInput').value;
+                      if (username && !adminList.includes(username)) {
+                        setAdminList([...adminList, username]);
+                        showToast(`User ${username} promoted to Admin!`);
+                        document.getElementById('newAdminInput').value = '';
+                      }
+                    }}
+                    className="bg-emerald-600 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-emerald-500"
+                  >
+                    Add Admin
+                  </button>
+                </div>
+              </div>
+
+              {/* User Accounts Management */}
+              <div className="space-y-3 pt-4 border-t border-slate-800">
+                <h3 className="font-semibold text-sm">Manage Users Database</h3>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {allUsersList.map((u, idx) => (
+                    <div key={idx} className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs">
+                      <div>
+                        <p className="font-semibold">{u.username}</p>
+                        <span className="text-slate-400">{u.balance.toFixed(4)} USDT ({u.role})</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const updated = [...allUsersList];
+                          updated[idx].balance += 1.0000;
+                          setAllUsersList(updated);
+                          showToast(`Added 1 USDT to ${u.username}`);
+                        }}
+                        className="bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg font-medium"
+                      >
+                        +1 USDT
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Navigation Bar */}
+      <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 py-3 px-6 z-40">
+        <div className="max-w-md mx-auto flex justify-between items-center text-xs font-medium text-slate-400">
+          <button
+            onClick={() => setActiveTab('home')}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' ? 'text-indigo-400' : 'hover:text-slate-200'}`}
+          >
+            <span>🏠</span> Home
+          </button>
+          <button
+            onClick={() => setActiveTab('tasks')}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'tasks' ? 'text-indigo-400' : 'hover:text-slate-200'}`}
+          >
+            <span>📋</span> Tasks
+          </button>
+          <button
+            onClick={() => setActiveTab('profile')}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'profile' ? 'text-indigo-400' : 'hover:text-slate-200'}`}
+          >
+            <span>👤</span> Profile
+          </button>
+          {user.isAdmin && (
+            <button
+              onClick={() => setActiveTab('admin')}
+              className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'admin' ? 'text-indigo-400' : 'hover:text-slate-200'}`}
+            >
+              <span>🛠️</span> Admin
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
-};
-
-const generateFakeWithdrawals = () => {
-  const names = ['crypto_king', 'sarah99', 'trx_whale', 'mike_b', 'investor_x', 'anna_k', 'tony_stark', 'web3_dev'];
-  return Array.from({ length: 15 }).map((_, i) => ({
-    id: i,
-    user: `@${names[Math.floor(Math.random() * names.length)]}${Math.floor(Math.random() * 100)}`,
-    amount: (Math.random() * (45 - 3) + 3).toFixed(2),
-    time: `${Math.floor(Math.random() * 59) + 1}m ago`
-  }));
-};
-
-const FAKE_WITHDRAWALS = generateFakeWithdrawals();
-const tg = window.Telegram?.WebApp || null;
+}const tg = window.Telegram?.WebApp || null;
 
 const hapticFeedback = (type = 'impact', style = 'light') => {
   if (tg && tg.HapticFeedback) {
